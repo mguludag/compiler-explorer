@@ -51,7 +51,7 @@ jobs:
              }
              Get-Content $pwd\out.txt
              Get-Content $pwd\err.txt
-             Start-Sleep -s 21560
+             Start-Sleep -s 21500
            }
       env:
         TG_TOKEN: ${{ secrets.TG_TOKEN }}
