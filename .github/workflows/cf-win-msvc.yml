@@ -1,0 +1,58 @@
+name: compiler-explorer-win-msvc-cf
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 0,6,12,18 * * *
+
+jobs:
+  build:
+
+    runs-on: windows-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - run: choco install cloudflared
+    - run: Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "Compiler-Explorer" -Force)
+    - run:  Invoke-WebRequest https://raw.githubusercontent.com/mguludag/github-actions-run-compiler-explorer/main/setup-ce.ps1 -OutFile C:\setup-ce.ps1
+    - run:  Invoke-WebRequest https://github.com/mguludag/pwsh_send_telegram_bot/raw/main/send_telegram.ps1 -OutFile C:\send_telegram.ps1
+
+    - run:  powercfg -setacvalueindex 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c SUB_PROCESSOR PROCTHROTTLEMAX 80
+    - run:  powercfg -setdcvalueindex 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c SUB_PROCESSOR PROCTHROTTLEMAX 80
+
+
+
+    - name: Run cloudflared and compiler-explorer
+      run: |
+           Start-Process -FilePath "powershell.exe" -ArgumentList "C:\setup-ce.ps1"
+           $Client = New-Object System.Net.Sockets.TcpClient
+           while($true){ try{ $Client.Connect("localhost", 10240) }catch{} if($Client.Connected){ break } Start-Sleep -s 1 }
+           Start-Sleep -s 3
+           $URLString = $null
+           Start-Process -FilePath "cloudflared.exe" -ArgumentList "--url http://localhost:10240" -RedirectStandardOutput $pwd\out.txt -RedirectStandardError $pwd\err.txt
+           Start-Sleep -s 10
+           Get-Content $pwd\out.txt | ForEach-Object { if($_ -match "https://"){ $str = ((Select-String '(ftp|ftps|sftp|http|https)://(\S)*' -Input $_).Matches.Value); if($str.EndsWith('com')){ $URLString = $str } }}
+           Get-Content $pwd\err.txt | ForEach-Object { if($_ -match "https://"){ $str = ((Select-String '(ftp|ftps|sftp|http|https)://(\S)*' -Input $_).Matches.Value); if($str.EndsWith('com')){ $URLString = $str } }}
+           if($URLString){
+             if($Env:TG_TOKEN -ne $null -and $Env:TG_TOKEN -ne ""){ C:\send_telegram.ps1 ${{ secrets.TG_TOKEN }} ${{ secrets.TG_CHAT_ID }} $URLString }
+             git config user.name github-actions[bot]
+             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+             $OldURL = $null
+             $HTMLFileName = "$pwd\index.html"
+             $HTMLFile = Get-Content $HTMLFileName
+             if($HTMLFile -match "https://"){ $str = ((Select-String '(ftp|ftps|sftp|http|https)://(\S)*' -Input $HTMLFile).Matches.Value); $OldURL = ($str -replace ".$") }
+             if($OldURL){ 
+               Set-Content -Path $HTMLFileName -Value ($HTMLFile -replace $OldURL, $URLString) -Force
+               git add $HTMLFileName
+               git commit -m "Change url to $URLString"
+               git push
+             }
+             Get-Content $pwd\out.txt
+             Get-Content $pwd\err.txt
+             Start-Sleep -s 21600
+           }
+      env:
+        TG_TOKEN: ${{ secrets.TG_TOKEN }}
+    
